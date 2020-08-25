@@ -218,6 +218,7 @@ impl MutationChat {
         return Ok(mesg.id);
     }
 
+
     async fn create_dm(&self, ctx: &Context<'_>, account: ID) -> FieldResult<ID> {
         let auth = get_auth(ctx)?;
         let created = Utc::now();

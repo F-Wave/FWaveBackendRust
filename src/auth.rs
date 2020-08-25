@@ -40,7 +40,7 @@ fn create_session_token() -> String {
 }
 
 //todo: Prevent too many sessions from being generated for repeated logins
-async fn begin_session(ctx: &SharedContext, account: ID, device_token: Option<String>) -> FieldResult<String> {
+async fn begin_session(ctx: &SharedContext, account: ID, device_token: Option<String>) -> FieldResult<LoginResult> {
     let token = create_session_token();
 
     let signed_in_at = Utc::now();
@@ -61,7 +61,7 @@ async fn begin_session(ctx: &SharedContext, account: ID, device_token: Option<St
             .await?;
     }
 
-    Ok(token)
+    Ok(LoginResult{token, account_id: account})
 }
 
 #[derive(Default)]
@@ -77,9 +77,15 @@ pub struct CreateAccountForm {
     device_token: Option<String>
 }
 
+#[SimpleObject]
+pub struct LoginResult {
+    token: String,
+    account_id: ID
+}
+
 #[Object]
 impl MutationAuth {
-    pub async fn login(&self, ctx: &Context<'_>, username: String, password: String, device_token: Option<String>) -> FieldResult<String> {
+    pub async fn login(&self, ctx: &Context<'_>, username: String, password: String, device_token: Option<String>) -> FieldResult<LoginResult> {
         let shared = get_shared(ctx);
         let found_user = query!("SELECT id, passwordhash FROM Users where username=$1", &username)
             .fetch_optional(&shared.db)
@@ -97,7 +103,7 @@ impl MutationAuth {
         return Err(FieldError("Incorrect password".to_string(), None));
     }
 
-    pub async fn create_account(&self, ctx: &Context<'_>, form: CreateAccountForm) -> FieldResult<String> {
+    pub async fn create_account(&self, ctx: &Context<'_>, form: CreateAccountForm) -> FieldResult<LoginResult> {
         let shared = get_shared(ctx);
         let password_hash = bcrypt::hash(form.password, bcrypt::DEFAULT_COST)?;
 

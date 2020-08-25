@@ -50,13 +50,14 @@ pub struct Comment {
     pub id: ID,
     pub account: ID,
     pub mesg: String,
-    //pub sent: Timestamp,
+    pub sent: DateTime<Utc>,
 }
 
 #[Object]
 impl Comment {
     async fn id(&self) -> ID { self.id }
     async fn mesg(&self) -> &str { &self.mesg }
+    async fn sent(&self) -> &Timestamp { &self.sent }
     async fn account(&self, ctx: &Context<'_>) -> FieldResult<Account> {
         let mut account = get_loaders(ctx).account.clone();
         Ok(account.load(self.account).await?)
@@ -103,13 +104,20 @@ impl Post {
         Ok(result)
     }
 
+    async fn comment_count(&self, context: &Context<'_>) -> FieldResult<i64> {
+        let results = query!("SELECT COUNT(id) FROM Comments WHERE post=$1", self.id)
+            .fetch_one(get_db(context))
+            .await?;
+
+        Ok(results.count.unwrap_or_else(|| 0))
+    }
+
     async fn comments(&self, context: &Context<'_>, cursor: i64, limit: i64) -> FieldResult<Vec<Comment>> {
         let db = get_db(context);
         let id: i32 = self.id;
-        let results = query_as!(Comment, "SELECT id, account, mesg FROM Comments WHERE post=$1 LIMIT $2", id, limit)
+        let results = query_as!(Comment, "SELECT id, account, mesg, sent FROM Comments WHERE post=$1 LIMIT $2", id, limit)
             .fetch_all(db)
             .await?;
-
         Ok(results)
     }
 }
