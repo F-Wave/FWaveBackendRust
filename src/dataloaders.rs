@@ -1,5 +1,5 @@
 use crate::context::{SharedContext};
-use crate::dataloader::*;
+use conc::dataloader::*;
 use crate::schema::*;
 use crate::prof::*;
 use log::info;
@@ -11,7 +11,6 @@ use std::time::{Duration};
 use sqlx;
 use sqlx::{query_as};
 use serde::export::Formatter;
-
 
 pub struct Loaders {
     pub account: DataLoaderEndpoint<Account>,
@@ -44,7 +43,7 @@ impl std::error::Error for DidNotFindPostError {
 }
 
 #[async_trait]
-impl DataLoaderHandler<Account> for AccountLoader {
+impl DataLoaderHandler<Account, SharedContext> for AccountLoader {
     async fn batch_execute(
         &mut self,
         shared: &SharedContext,
@@ -53,13 +52,12 @@ impl DataLoaderHandler<Account> for AccountLoader {
         let mut prof = Prof::new();
         let db = &shared.db;
 
-        let mut ids: Vec<i32> = Vec::with_capacity(results.len());
+        let mut ids: Vec<ID> = Vec::with_capacity(results.len());
         for (id, v) in &*results {
             ids.push(*id);
         }
 
         info!("LOADING BATCH IDS: {:?}", ids);
-
 
         let accounts = match query_as!(Account, "SELECT id, username, profile FROM Users WHERE id = ANY($1)", &ids)
             .fetch_all(db)

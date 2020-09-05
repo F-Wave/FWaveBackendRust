@@ -1,4 +1,3 @@
-use crate::context::SharedContext;
 use async_trait::async_trait;
 use std::boxed::Box;
 use std::clone::Clone;
@@ -228,16 +227,17 @@ pub type DataLoaderFunc<
 //fn(ctx: &SharedContext, results: &mut HashMap<ID, DataResult<T>>) -> F;
 
 #[async_trait]
-pub trait DataLoaderHandler<T> {
+pub trait DataLoaderHandler<T, C> {
     async fn batch_execute(
         &mut self,
-        ctx: &SharedContext,
+        ctx: &C,
         results: &mut HashMap<ID, DataResult<T>>,
     );
 }
 
 pub struct DataLoader<
-    F: DataLoaderHandler<T>, //Fn(&SharedContext, &mut HashMap<ID, DataResult<T>>) -> Fut,
+    F: DataLoaderHandler<T, C>, //Fn(&SharedContext, &mut HashMap<ID, DataResult<T>>) -> Fut,
+    C: Send + Sync,
     T: Clone + Send,
     //Fut: Future<Output = ()>,
 > {
@@ -248,13 +248,15 @@ pub struct DataLoader<
     batch_size: usize,
     timeout: Duration,
     timeout_t: Delay,
+    phantom: std::marker::PhantomData<C>,
 }
 
 impl<
-        F: 'static + Send + DataLoaderHandler<T>, // Fn(&SharedContext, &mut HashMap<ID, DataResult<T>>) -> Fut,
+        F: 'static + Send + DataLoaderHandler<T,C>, // Fn(&SharedContext, &mut HashMap<ID, DataResult<T>>) -> Fut,
+        C: 'static + Send + Sync,
         T: 'static + Clone + Send,
         //Fut: Future<Output = ()>,
-    > DataLoader<F, T>
+    > DataLoader<F, C, T>
 {
     fn infinite_t() -> Delay {
         //delay_for(Duration::from_millis(1))
@@ -263,7 +265,7 @@ impl<
 
     pub fn new(
         func: F,
-        shared_ctx: Arc<SharedContext>,
+        shared_ctx: Arc<C>,
         batch_size: usize,
         timeout: Duration,
     ) -> DataLoaderEndpoint<T> {
@@ -278,7 +280,8 @@ impl<
                 rx: rx,
                 batch_size: batch_size,
                 timeout: timeout,
-                timeout_t: Self::infinite_t()
+                timeout_t: Self::infinite_t(),
+                phantom: std::marker::PhantomData,
             }
             .run(shared_ctx),
         );
@@ -286,7 +289,7 @@ impl<
         DataLoaderEndpoint(tx)
     }
 
-    pub async fn run(mut self, ctx: Arc<SharedContext>) {
+    pub async fn run(mut self, ctx: Arc<C>) {
         let mut timeout = delay_for(self.timeout);
 
         loop {
@@ -321,7 +324,7 @@ impl<
         }
     }
 
-    async fn batch_execute(&mut self, ctx: &SharedContext) {
+    async fn batch_execute(&mut self, ctx: &C) {
         self.loader.batch_execute(ctx, &mut self.results).await;
 
         //with a retain mut could merge into one loop

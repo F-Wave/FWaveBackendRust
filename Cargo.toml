@@ -10,6 +10,8 @@ edition = "2018"
 
 
 [dependencies]
+
+conc = { path = "src/conc" }
 sqlx = { version = "0.4.0-beta.1", default-features = false, features = [ "runtime-tokio", "macros", "postgres", "chrono" ] }
 async-graphql = "1.17.8"
 tokio = { version="0.2.22", features = ["macros", "tcp", "dns", "io-util"] }
@@ -18,10 +20,13 @@ log = "0.4"
 pretty_env_logger = "0.4"
 async-graphql-derive = "1.17.6"
 async-graphql-parser = "1.17.3"
+async-trait = "0.1.37"
 serde_json = "1.0.57"
 serde = "1.0.115"
-chrono = "0.4.15"
-async-trait = "0.1.37"
+chrono = { version = "0.4.15", features = ["serde"] }
 dotenv = "0.15.0"
 bcrypt = "0.8.2"
 rand = "0.7.3"
+redis = "0.17.0"
+redis-serialize = { path = "src/redis_serialize" }
+

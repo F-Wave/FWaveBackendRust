@@ -5,12 +5,17 @@ use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
 use std::sync::Arc;
 use chrono::{Utc};
-use crate::dataloader::ID;
-use crate::context::{get_shared, get_db, SharedContext};
+use redis;
+use conc::dataloader::ID;
+use crate::context::{get_shared, get_db, SharedContext, RedisClient, RedisConnection};
+use redis::AsyncCommands;
+use redis::aio::ConnectionLike;
+
 
 pub struct Auth {
-    pub user: i32,
+    pub user: ID,
     pub session_token: String,
+    pub personalization: bool,
 }
 
 pub fn get_auth<'a>(ctx: &'a Context<'a>) -> FieldResult<&'a Auth> {
@@ -20,14 +25,16 @@ pub fn get_auth<'a>(ctx: &'a Context<'a>) -> FieldResult<&'a Auth> {
     }
 }
 
-pub async fn auth_token(ctx: &SharedContext, token: &str) -> FieldResult<Auth> {
-    let result = query!("SELECT account FROM Sessions where token = $1", token)
-        .fetch_one(&ctx.db)
-        .await?;
+fn account_for_session(token: &str) -> String { format!("session:{}:account", token) }
+fn device_token_for_account(account: ID) -> String{ format!("account:{}:devices", account)}
+
+pub async fn auth_token(redis: &mut RedisConnection, token: &str) -> FieldResult<Auth> {
+    let account : ID = redis.get(&account_for_session(token)).await?;
 
     Ok(Auth{
-        user: result.account,
-        session_token: token.to_string()
+        user: account,
+        session_token: token.to_string(),
+        personalization: true
     })
 }
 
@@ -39,27 +46,27 @@ fn create_session_token() -> String {
         .collect()
 }
 
+use std::time::Duration;
+const SESSION_EXPIRATION : usize = 60 * 60 * 24;
+
 //todo: Prevent too many sessions from being generated for repeated logins
 async fn begin_session(ctx: &SharedContext, account: ID, device_token: Option<String>) -> FieldResult<LoginResult> {
     let token = create_session_token();
 
     let signed_in_at = Utc::now();
 
-    query!("INSERT INTO Sessions (token, account, signedInAt)
-    VALUES ($1, $2, $3)
-    ", token, account, signed_in_at)
-        .execute(&ctx.db)
-        .await?;
+
+
+    let mut pipe = redis::pipe();
+    pipe.set_ex(&account_for_session(&token), account,SESSION_EXPIRATION);
 
     if let Some(token) = device_token {
-        let _ = query!("
-        INSERT INTO Devices (deviceToken, account)
-        VALUES ($1, $2)
-        ON CONFLICT DO NOTHING
-        ", token, account)
-            .execute(&ctx.db)
-            .await?;
+        pipe.lpush(&device_token_for_account(account), token);
     }
+
+
+    let mut redis = ctx.redis.conn().await;
+    pipe.query_async(&mut redis).await?;
 
     Ok(LoginResult{token, account_id: account})
 }

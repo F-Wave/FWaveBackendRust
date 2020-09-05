@@ -1,14 +1,15 @@
 mod context;
-mod dataloader;
 mod dataloaders;
 mod schema;
 mod prof;
 mod auth;
 mod image;
 mod chat;
+mod explore;
+mod analytics;
 //mod time;
 
-use crate::context::{make_shared_context, SharedContext};
+use crate::context::{make_shared_context, SharedContext, RedisClient};
 use crate::schema::*;
 use crate::auth::{Auth, auth_token};
 use crate::dataloaders::{Loaders, make_loaders};
@@ -25,6 +26,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, Duration};
 use log::{info};
 use hyper::http::HeaderValue;
+
 
 enum HTTPResponse {
     Ok(Response<Body>),
@@ -186,7 +188,8 @@ async fn route_and_auth(ctx: Arc<SharedContext>, loaders: Arc<Loaders>, req: Req
                 Err(e) => return HTTPResponse::Error(StatusCode::BAD_REQUEST, "Bearer token must be string".to_string())
             };
 
-            match auth_token(&ctx, as_str).await {
+            let mut redis = ctx.redis.conn().await;
+            match auth_token(&mut redis, as_str).await {
                 Ok(auth) => Some(auth),
                 Err(e) => return HTTPResponse::Error(StatusCode::BAD_REQUEST, "Failed to authenticate".to_string()) //todo not always the case
             }
@@ -282,6 +285,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }))
         }
     });
+
+
+    //{"action":{"Viewed":{"Project":10}},"timestamp":"2020-09-05T08:20:28.534821Z","duration":100}
+    analytics::event_json_sample();
+
     let server = Server::bind(&addr).serve(service_fn);
 
     info!("Listening on http://{}", addr);

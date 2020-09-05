@@ -4,7 +4,7 @@ use chrono::{Utc, DateTime};
 use sqlx::{query, query_as};
 use log::{info};
 use std::concat;
-use crate::dataloader::{ID};
+use conc::dataloader::{ID};
 use crate::dataloaders::get_loaders;
 use crate::context::*;
 use crate::auth::{get_auth, Auth};
@@ -62,7 +62,7 @@ struct Message {
     sent: DateTime<Utc>,
 }
 
-async fn get_messages(db: &Client, chat: ID) -> FieldResult<Vec<Message>> {
+async fn get_messages(db: &DBClient, chat: ID) -> FieldResult<Vec<Message>> {
     let messages = query!("SELECT Messages.ID, Users.ID as account_id, Users.username, Users.profile, Messages.mesg, Messages.sent
 	FROM Messages
 	INNER JOIN Users ON Messages.account = Users.ID

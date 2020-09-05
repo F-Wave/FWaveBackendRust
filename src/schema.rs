@@ -1,10 +1,11 @@
 //use crate::context::Context;
 use crate::context::{get_db, get_shared};
 use crate::dataloaders::*;
-use crate::dataloader::ID;
+use conc::dataloader::ID;
 use crate::prof::*;
 use crate::auth::MutationAuth;
 use crate::chat::{QueryChats, MutationChat};
+use crate::explore::QueryExplore;
 use async_graphql::{Context, FieldResult, InputValueError, InputValueResult, ScalarType, EmptySubscription, Schema};
 use async_graphql_derive::*;
 use chrono::{DateTime, Utc};
@@ -13,10 +14,12 @@ use std::vec::Vec;
 use sqlx::{query_as, query};
 use log::info;
 use std::default::Default;
+use crate::analytics::Analytics;
 
 pub type Image = i32;
 
 type Timestamp = DateTime<Utc>;
+
 
 /*
 impl<'a> FromSql<'a> for Timestamp {
@@ -75,11 +78,11 @@ pub struct Post {
 
 #[Object]
 impl Post {
-    async fn id(&self) -> i32 { self.id }
-    async fn description(&self) -> &str { &self.description}
-    async fn title(&self) -> &str { &self.title }
-    async fn image(&self) -> i32 { self.image }
-    async fn likes(&self, context: &Context<'_>) -> FieldResult<i32> {
+    pub async fn id(&self) -> i32 { self.id }
+    pub async fn description(&self) -> &str { &self.description}
+    pub async fn title(&self) -> &str { &self.title }
+    pub async fn image(&self) -> i32 { self.image }
+    pub async fn likes(&self, context: &Context<'_>) -> FieldResult<i32> {
         let db = get_db(context);
         let id: i32 = self.id;
 
@@ -90,7 +93,7 @@ impl Post {
         Ok(row.count.unwrap() as i32)
     }
 
-    async fn account(&self, context: &Context<'_>) -> FieldResult<Account> {
+    pub async fn account(&self, context: &Context<'_>) -> FieldResult<Account> {
         //let mut prof = Prof::new();
 
         /*let result = query_as!(Account, "SELECT id, username, profile FROM Users WHERE id = $1", self.account)
@@ -104,7 +107,7 @@ impl Post {
         Ok(result)
     }
 
-    async fn comment_count(&self, context: &Context<'_>) -> FieldResult<i64> {
+    pub async fn comment_count(&self, context: &Context<'_>) -> FieldResult<i64> {
         let results = query!("SELECT COUNT(id) FROM Comments WHERE post=$1", self.id)
             .fetch_one(get_db(context))
             .await?;
@@ -112,7 +115,7 @@ impl Post {
         Ok(results.count.unwrap_or_else(|| 0))
     }
 
-    async fn comments(&self, context: &Context<'_>, cursor: i64, limit: i64) -> FieldResult<Vec<Comment>> {
+    pub async fn comments(&self, context: &Context<'_>, cursor: i64, limit: i64) -> FieldResult<Vec<Comment>> {
         let db = get_db(context);
         let id: i32 = self.id;
         let results = query_as!(Comment, "SELECT id, account, mesg, sent FROM Comments WHERE post=$1 LIMIT $2", id, limit)
@@ -123,79 +126,68 @@ impl Post {
 }
 
 
-struct Bond {
-    id: ID,
-    image: i32,
-    sdgs: Vec<i32>,
-    title: String,
-    issuer: String,
-    description: String,
-    price: i32,
-    interest: f64,
-    maturity: i32,
-    standardsandpoor: String,
-    fitchrating: String,
-    cicerorating: String,
-    msciesrating: String,
-    moodysrating: String,
-    amountinvested: i32,
-    total: i32,
+pub struct Bond {
+    pub id: ID,
+    pub image: i32,
+    pub sdgs: Vec<i32>,
+    pub title: String,
+    pub issuer: String,
+    pub description: String,
+    pub price: i32,
+    pub interest: f64,
+    pub maturity: i32,
+    pub standardsandpoor: String,
+    pub fitchrating: String,
+    pub cicerorating: String,
+    pub msciesrating: String,
+    pub moodysrating: String,
+    pub amountinvested: i32,
+    pub total: i32,
 }
 
 #[async_graphql_derive::Object]
 impl Bond {
-    async fn id(&self) -> ID { self.id }
-    async fn description(&self) -> &str { &self.description }
-    async fn price(&self) -> i32 { self.price }
-    async fn image(&self) -> i32 { self.image }
-    async fn sdgs(&self) -> &[i32] { &self.sdgs }
-    async fn name(&self) -> &str { &self.title }
-    async fn issuer(&self) -> &str { &self.issuer }
-    async fn maturity(&self) -> &i32 { &self.maturity }
-    async fn amount_invested(&self) -> i32 { self.amountinvested }
-    async fn total(&self) -> i32 { self.total }
-    async fn interest(&self) -> f64 { self.interest }
-    async fn standardsandpoor(&self) -> &str { &self.standardsandpoor }
-    async fn fitchrating(&self) -> &str { &self.fitchrating }
-    async fn cicerorating(&self) -> &str { &self.cicerorating }
-    async fn msciesrating(&self) -> &str { &self.msciesrating }
-    async fn moodysrating(&self) -> &str { &self.moodysrating }
-    async fn notable_members(&self, ctx: &Context<'_>) -> FieldResult<Vec<Account>> {
+    pub async fn id(&self) -> ID { self.id }
+    pub async fn description(&self) -> &str { &self.description }
+    pub async fn price(&self) -> i32 { self.price }
+    pub async fn image(&self) -> i32 { self.image }
+    pub async fn sdgs(&self) -> &[i32] { &self.sdgs }
+    pub async fn title(&self) -> &str { &self.title }
+    pub async fn issuer(&self) -> &str { &self.issuer }
+    pub async fn maturity(&self) -> &i32 { &self.maturity }
+    pub async fn amount_invested(&self) -> i32 { self.amountinvested }
+    pub async fn total(&self) -> i32 { self.total }
+    pub async fn interest(&self) -> f64 { self.interest }
+    pub async fn standardsandpoor(&self) -> &str { &self.standardsandpoor }
+    pub async fn fitchrating(&self) -> &str { &self.fitchrating }
+    pub async fn cicerorating(&self) -> &str { &self.cicerorating }
+    pub async fn msciesrating(&self) -> &str { &self.msciesrating }
+    pub async fn moodysrating(&self) -> &str { &self.moodysrating }
+    pub async fn notable_members(&self, ctx: &Context<'_>) -> FieldResult<Vec<Account>> {
         Ok(vec![])
     }
 }
 
-struct Project {
-    id: i32,
-    name: String,
-    description: String,
-    image: Image,
-    sdgs: Vec<i32>,
-    latitude: f64,
-    longitude: f64
+pub struct Project {
+    pub id: i32,
+    pub name: String,
+    pub description: String,
+    pub image: Image,
+    pub sdgs: Vec<i32>,
+    pub latitude: f64,
+    pub longitude: f64
 }
 #[Object]
 impl Project {
-    async fn id(&self) -> i32 { self.id }
-    async fn name(&self) -> &str { &self.name }
-    async fn description(&self) -> &str { &self.description }
-    async fn image(&self) -> i32 { self.image }
-    async fn sdgs(&self) -> &[i32] { &self.sdgs }
-    async fn latitude(&self) -> f64 { self.latitude }
-    async fn longitude(&self) -> f64 { self.longitude }
+    pub async fn id(&self) -> i32 { self.id }
+    pub async fn title(&self) -> &str { &self.name } //todo change database field to title
+    pub async fn description(&self) -> &str { &self.description }
+    pub async fn image(&self) -> i32 { self.image }
+    pub async fn sdgs(&self) -> &[i32] { &self.sdgs }
+    pub async fn latitude(&self) -> f64 { self.latitude }
+    pub async fn longitude(&self) -> f64 { self.longitude }
 }
 
-#[Interface(
-    field(name = "id", type="ID"),
-    field(name = "name", type="&str"),
-    field(name = "image", type="Image"),
-    field(name = "description", type="&str"),
-    field(name = "sdgs", type="&[i32]")
-)]
-enum ExploreSearchResult {
-    Project(Project),
-    Bond(Bond),
-}
 
 #[derive(Default)]
 pub struct QueryFeed;
@@ -226,57 +218,9 @@ impl QueryFeed {
     }
 }
 
-#[derive(Default)]
-pub struct QueryExplore;
-
-#[Object]
-impl QueryExplore {
-    async fn explore(&self, ctx: &Context<'_>, sdg: Option<i32>, filter: Option<String>) -> FieldResult<Vec<ExploreSearchResult>> {
-        let db = get_db(ctx);
-
-        let mut prof = Prof::new();
-
-        let bonds = query_as!(Bond, "SELECT id, image, sdgs, title, issuer, description,
-        interest, maturity, price,
-        msciesrating, moodysrating, standardsandpoor,
-        fitchrating, amountinvested,
-        total, cicerorating
-        FROM BONDS
-        WHERE
-            ($1::text is null or indexed @@ to_tsquery($1))
-            AND ($2::int is null or $2 = ANY(sdgs))", filter, sdg)
-            .fetch_all(db)
-            .await?;
-
-        prof.log("Searched through bonds");
-
-        let projects = query_as!(Project, "SELECT id, name, description, image, sdgs, latitude, longitude \
-        FROM Projects
-        WHERE
-            (indexed @@ to_tsquery($1) or $1 is null)
-            AND ($2 = ANY(sdgs) or $2 is null)
-            ", filter, sdg)
-            .fetch_all(db)
-            .await?;
-
-        prof.log("Searched through projects");
-
-        let mut result : Vec<ExploreSearchResult> = Vec::with_capacity(bonds.len() + projects.len());
-        for project in projects {
-            result.push(ExploreSearchResult::Project(project));
-        }
-
-        for bond in bonds {
-            result.push(ExploreSearchResult::Bond(bond));
-        }
-
-        return Ok(result);
-    }
-}
-
 //ROOT
 #[derive(async_graphql::GQLMergedObject, Default)]
-pub struct QueryRoot(pub QueryFeed, pub QueryExplore, pub QueryChats);
+pub struct QueryRoot(pub QueryFeed, pub QueryExplore, pub QueryChats, pub Analytics);
 
 #[derive(async_graphql::GQLMergedObject, Default)]
 pub struct MutationRoot(pub MutationAuth, pub MutationChat);
