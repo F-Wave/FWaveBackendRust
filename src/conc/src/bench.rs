@@ -65,7 +65,7 @@ mod tests {
     #[test]
     fn test_mpmc() {
        tokio_test::block_on(async {
-           let (mut send, mut recv) = mpmc::channel(10);
+           let (mut send, mut recv) = mpmc::channel(2);
 
            tokio::spawn(async move {
                for i in 0..3 {

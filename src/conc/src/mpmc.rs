@@ -20,12 +20,14 @@ struct Waitlist<T: Send> {
 
 struct Internal<T: Send> {
     queue: Vec<Option<T>>, //ring buffer
-    receivers: Spinlock<Vec<Waker>>,
-    senders: Spinlock<Vec<(T, Waker)>>,
-    read_at: atomic::AtomicU32,
+    receivers: Vec<Waker>,
+    senders: Vec<(T, Waker)>,
+    head: Wrapping<u32>,
+    tail: Wrapping<u32>,
+    /*read_at: atomic::AtomicU32,
     head: atomic::AtomicU32,
     write_at: atomic::AtomicU32,
-    tail: atomic::AtomicU32,
+    tail: atomic::AtomicU32,*/
 }
 /*
 fn head(state: u32) -> u16 {
@@ -45,11 +47,11 @@ fn from_head_and_tail(head: u16, tail: u16) -> u32 {
 }*/
 
 pub struct Receiver<T: Send> {
-    internal: Arc<UnsafeCell<Internal<T>>>,
+    internal: Arc<Spinlock<Internal<T>>>,
 }
 
 pub struct Sender<T: Send> {
-    internal: Arc<UnsafeCell<Internal<T>>>
+    internal: Arc<Spinlock<Internal<T>>>
 }
 
 unsafe impl<T: Send> Sync for Receiver<T> {}
@@ -65,41 +67,27 @@ impl<T: Send> Clone for Sender<T> {
 
 impl<T: Send> Sender<T> {
     fn send_or_add_to_waitlist(&mut self, waker: Option<Waker>, value: T) -> bool {
-        let internal: &mut Internal<T> = unsafe { &mut *self.internal.get() };
+        let mut internal = self.internal.lock();
 
         let n = internal.queue.len() as u32; //should never resize
-        let mut write_at = Wrapping(0);
 
-        loop {
-            write_at = Wrapping(internal.write_at.load(Ordering::Acquire)); //check ordering
-            let tail = Wrapping(internal.tail.load(Ordering::Acquire));
+        let is_full = (internal.head - internal.tail).0 == n;
+        debug_assert!((internal.head - internal.tail).0 <= n);
 
-            let is_full = (write_at - tail).0 == n;
-            assert!((write_at - tail).0 <= n);
-
-            if is_full {
-                if let Some(waker) = waker {
-                    let mut senders = internal.senders.lock();
-                    senders.push((value, waker));
-                }
-                return false
+        if is_full {
+            if let Some(waker) = waker {
+                internal.senders.push((value, waker));
             }
-
-            let found = internal.write_at.compare_and_swap(write_at.0, (write_at + Wrapping(1)).0, Ordering::Release);
-            if found == write_at.0 { break }
+            return false
         }
 
-        assert!(internal.queue[(write_at.0 % n) as usize].is_none());
-        internal.queue[(write_at.0 % n) as usize] = Some(value);
+        debug_assert!(internal.queue[internal.head.0 as usize].is_none());
 
-        while write_at.0 != internal.head.compare_and_swap(write_at.0, (write_at + Wrapping(1)).0, Ordering::Release) {
-            //ensures that receiver only sees elements which are written to
-            //as in let's say that two threads are granted write access, elements 1 and 2, write to element 2 completes and write_at is set to 2
-            //which will cause a data race since the write to element 1 hasn't completed yet
-        }
+        let head = internal.head;
+        internal.queue[(head.0 % n) as usize] = Some(value);
+        internal.head += Wrapping(1);
 
-        let mut receivers = internal.receivers.lock();
-        if let Some(waker) = receivers.pop() {
+        if let Some(waker) = internal.receivers.pop() {
             waker.wake()
         }
 
@@ -139,41 +127,28 @@ impl<T: Send> Clone for Receiver<T> {
 
 impl<T: Send> Receiver<T> {
     pub fn recv_or_add_to_waitlist(&mut self, waker: Option<Waker>) -> Option<T> {
-        let internal: &mut Internal<T> = unsafe { &mut *self.internal.get() };
+        let mut internal = self.internal.lock();
         let n = internal.queue.len() as u32; //should never resize
-        let mut read_at = Wrapping(0);
 
-        loop {
-            read_at = Wrapping(internal.read_at.load(Ordering::Acquire)); //check ordering
-            let head = Wrapping(internal.head.load(Ordering::Acquire));
-
-            let is_empty = (head - read_at).0 == 0;
-            if is_empty {
-                {
-                    let mut senders = internal.senders.lock();
-                    if let Some((value, waker)) = senders.pop() {
-                        waker.wake();
-                        return Some(value)
-                    }
+        let is_empty = (internal.head - internal.tail).0 == 0;
+        if is_empty {
+            {
+                if let Some((value, waker)) = internal.senders.pop() {
+                    waker.wake();
+                    return Some(value)
                 }
-
-                if let Some(waker) = waker {
-                    let mut receivers = internal.receivers.lock();
-                    receivers.push(waker);
-                }
-
-                return None
             }
 
-            let found = internal.read_at.compare_and_swap(read_at.0, (read_at + Wrapping(1)).0, Ordering::Release);
-            if found == read_at.0 { break }
+            if let Some(waker) = waker {
+                internal.receivers.push(waker);
+            }
+
+            return None
         }
 
-        let value = internal.queue[(read_at.0 % n) as usize].take().unwrap();
-
-        while read_at.0 != internal.tail.compare_and_swap(read_at.0, (read_at + Wrapping(1)).0, Ordering::Release) {
-            //ensures that the sender does not write over values currently being read
-        }
+        let tail = internal.tail;
+        let value = internal.queue[(tail.0 % n) as usize].take().unwrap();
+        internal.tail += Wrapping(1);
 
         Some(value)
     }
@@ -189,14 +164,14 @@ impl<T: Send> Receiver<T> {
 }
 
 pub fn channel<T: Send>(bounded: usize) -> (Sender<T>, Receiver<T>) {
-    let internal = Arc::new(UnsafeCell::new(Internal{
+    let internal = Arc::new(Spinlock::new(Internal{
         queue: (0..bounded).map(|_| None).collect(),
-        write_at: atomic::AtomicU32::new(0),
-        read_at: atomic::AtomicU32::new(0),
-        receivers: Spinlock::new(vec![]),
-        senders: Spinlock::new(vec![]),
-        tail: atomic::AtomicU32::new(0),
-        head: atomic::AtomicU32::new(0),
+        //write_at: atomic::AtomicU32::new(0),
+        //read_at: atomic::AtomicU32::new(0),
+        receivers: vec![],
+        senders: vec![],
+        tail: Wrapping(0),
+        head: Wrapping(0),
     }));
 
     (Sender{internal: internal.clone()}, Receiver{internal: internal.clone()})
