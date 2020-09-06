@@ -7,30 +7,30 @@ mod tests {
     use crate::mpmc;
     use crate::mpmc::*;
 
-    const buffer_size: usize = 100;
-    const buffer_mul: usize = 10;
-    const num_producers: usize = 50;
-
-
+    const BUFFER_SIZE: usize = 1000;
+    const BUFFER_MUL: usize = 10;
+    const NUM_PRODUCERS: usize = 8;
 
     #[bench]
     fn bench_mpsc(b: &mut Bencher) {
-        let (sender, mut receiver) = mpsc::channel(buffer_size);
+        let (sender, mut receiver) = mpsc::channel(BUFFER_SIZE);
+
+        let mut runtime = tokio::runtime::Runtime::new().expect("Unable to create a runtime");
 
         b.iter(move || {
-            tokio_test::block_on(
+            runtime.block_on(
             async {
-                for i in 0..num_producers {
+                for i in 0..NUM_PRODUCERS {
                     let mut sender = sender.clone();
 
                     tokio::spawn(async move {
-                        for i in 0..buffer_size * buffer_mul {
+                        for i in 0..BUFFER_SIZE * BUFFER_MUL {
                             sender.send(i).await;
                         }
                     });
                 }
 
-                for i in 0..buffer_size * buffer_mul * num_producers {
+                for i in 0..BUFFER_SIZE * BUFFER_MUL * NUM_PRODUCERS {
                     let val = receiver.recv().await;
                 }
             });
@@ -40,23 +40,38 @@ mod tests {
 
     #[bench]
     fn bench_mpmc(b: &mut Bencher) {
-        let (sender, mut receiver) = mpmc::channel(buffer_size);
+        let (sender, mut receiver) = mpmc::channel(BUFFER_SIZE);
+
+        let mut runtime = tokio::runtime::Runtime::new().expect("Unable to create a runtime");
 
         b.iter(move || {
-            tokio_test::block_on(
+            runtime.block_on(
                 async {
-                    for i in 0..num_producers {
+                    let mut joins = Vec::with_capacity(NUM_PRODUCERS);
+
+                    for i in 0..NUM_PRODUCERS {
                         let mut sender = sender.clone();
+                        let mut receiver = receiver.clone();
 
                         tokio::spawn(async move {
-                            for i in 0..buffer_size * buffer_mul {
+                            for i in 0..BUFFER_SIZE * BUFFER_MUL {
                                 sender.send(i).await;
                             }
                         });
+
+                        joins.push(tokio::spawn(async move {
+                            for i in 0..BUFFER_SIZE * BUFFER_MUL {
+                                let val = receiver.recv().await;
+                            }
+                        }));
                     }
 
-                    for i in 0..buffer_size * buffer_mul * num_producers {
+                    /*for i in 0..BUFFER_SIZE * BUFFER_MUL * NUM_PRODUCERS {
                         let val = receiver.recv().await;
+                    }*/
+
+                    for join in joins {
+                        tokio::join!(join);
                     }
                 });
         });
@@ -67,15 +82,20 @@ mod tests {
        tokio_test::block_on(async {
            let (mut send, mut recv) = mpmc::channel(2);
 
+
+           let join = tokio::spawn(async move {
+               for i in 0..10 {
+                   assert_eq!(recv.recv().await, i);
+               }
+           });
+
            tokio::spawn(async move {
-               for i in 0..3 {
+               for i in 0..10 {
                    send.send(i).await;
                }
            });
 
-           for i in 0..3 {
-               assert_eq!(recv.recv().await, i);
-           }
+           tokio::join!(join);
        })
     }
 }
