@@ -11,8 +11,8 @@ pub struct SpinlockGuard<'a, T: Send> {
     spinlock: &'a Spinlock<T>,
 }
 
-impl<'a, T: Send> SpinlockGuard<'a, T> {
-    fn drop(&self) {
+impl<'a, T: Send> Drop for SpinlockGuard<'a, T> {
+    fn drop(&mut self) {
         self.spinlock.flag.store(false, Ordering::Release);
     }
 }
@@ -40,7 +40,7 @@ impl<T: Send> Spinlock<T> {
     }
 
     pub fn lock(&self) -> SpinlockGuard<T> {
-        while !self.flag.compare_and_swap(false, true, Ordering::Acquire) {}
+        while self.flag.compare_and_swap(false, true, Ordering::Acquire) {}
         SpinlockGuard{ spinlock: self }
     }
 }
