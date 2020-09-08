@@ -17,6 +17,8 @@ mod tests {
 
         let mut runtime = tokio::runtime::Runtime::new().expect("Unable to create a runtime");
 
+        println!("Testing mpsc");
+
         b.iter(move || {
             runtime.block_on(
             async {
@@ -43,8 +45,13 @@ mod tests {
         let (sender, mut receiver) = mpmc::channel(BUFFER_SIZE);
 
         let mut runtime = tokio::runtime::Runtime::new().expect("Unable to create a runtime");
+        let mut it = 0;
+
+        println!("Testing mpmc!");
 
         b.iter(move || {
+            it += 1;
+            //println!("On it {}", it);
             runtime.block_on(
                 async {
                     let mut joins = Vec::with_capacity(NUM_PRODUCERS);

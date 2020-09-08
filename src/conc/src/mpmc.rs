@@ -6,6 +6,7 @@ use std::task::{Waker, Poll};
 use crate::spinlock::Spinlock;
 use std::mem;
 use std::net::Shutdown::Write;
+use std::time::Duration;
 
 /*
 struct State {
@@ -175,22 +176,24 @@ impl<T: Send> TricolorVec<T> {
     }
 }
 
-struct Waitlist<T> {
-    receivers: Vec<Waker>,
-    senders: Vec<(T, Waker)>,
+pub struct Waitlist<T> {
+    pub receivers: Vec<Waker>,
+    pub senders: Vec<(T, Waker)>,
 }
 
-struct Internal<T: Send> {
-    queue: Vec<Tricolor<T>>, //ring buffer
-    waitlist: Tricolor<Waitlist<T>>,
-    head: atomic::AtomicU32,
-    tail: atomic::AtomicU32,
+pub struct Internal<T: Send> {
+    pub queue: Vec<(atomic::AtomicU32, UnsafeCell<Option<T>>)>, //ring buffer
+    pub waitlist: Spinlock<Waitlist<T>>,
+    pub head: atomic::AtomicU64,
+    pub tail: atomic::AtomicU64,
     /*read_at: atomic::AtomicU32,
     head: atomic::AtomicU32,
     write_at: atomic::AtomicU32,
     tail: atomic::AtomicU32,*/
 }
 
+unsafe impl<T: Send> Sync for Internal<T> {}
+unsafe impl<T: Send> Send for Internal<T> {}
 
 /*
 fn head(state: u32) -> u16 {
@@ -210,7 +213,7 @@ fn from_head_and_tail(head: u16, tail: u16) -> u32 {
 }*/
 
 pub struct Receiver<T: Send> {
-    internal: Arc<Internal<T>>,
+    pub internal: Arc<Internal<T>>,
 }
 
 pub struct Sender<T: Send> {
@@ -230,14 +233,20 @@ impl<T: Send> Sender<T> {
         let n = internal.queue.len() as u32; //should never resize
         let mut insert_at : u32 = 0;
         let mut next_head : u32 = 0;
+        let mut lap : u32 = 0;
+
+        let mut waitlist = internal.waitlist.lock();
 
         //println!("=== SEND ATTEMPT ===");
 
         loop {
-            let head = internal.head.load(Ordering::Acquire);
+            let head_and_lap = internal.head.load(Ordering::Acquire);
+            lap = (head_and_lap >> 32) as u32;
+            let head = head_and_lap as u32;
+            let elap = internal.queue[head as usize].0.load(Ordering::Acquire);
             //let tail = Wrapping(internal.tail.load(Ordering::Acquire));
 
-            let is_full = !internal.queue[(head % n) as usize].is_empty();
+            let is_full = (lap as i32 - elap as i32) > 0;//  !internal.queue[(head % n) as usize].is_empty();
 
             /*if (head - tail).0 > n {
                 println!("Should not happen!!! {} {}", head, tail);
@@ -246,35 +255,63 @@ impl<T: Send> Sender<T> {
 
             if is_full {
                 if let Some(waker) = &waker {
-                    let waitlist = internal.waitlist.acquire(WRITTEN_TO);
+                    //let mut waitlist = internal.waitlist.lock(); //internal.waitlist.acquire(WRITTEN_TO);
 
-                    //Added to wait list!
-                    let head = internal.head.load(Ordering::Acquire);
-                    if internal.queue[(head % n) as usize].is_empty() {
-                        internal.waitlist.release(waitlist.receivers.len() == 0);
+                    let head_and_lap = internal.head.load(Ordering::Acquire);
+                    let lap = (head_and_lap >> 32) as u32;
+                    let head = head_and_lap as u32;
+                    let elap = internal.queue[head as usize].0.load(Ordering::Acquire);
+
+                    if lap == elap { //inserted value which has not been read yet
+                        //internal.waitlist.release(waitlist.receivers.len() == 0);
                         continue
                     }
 
+
                     waitlist.senders.push((value, waker.clone())); //remove clone somehow
-                    internal.waitlist.release(waitlist.receivers.len() == 0);
-                    //println!("Adding sender in waitlist {} {} max: {}", head.0, tail.0, n);
+
+                    if let Some(waker) = waitlist.receivers.pop() {
+                        //println!("Removing receiver from waitlist rare!!!! {}", head_and_lap);
+                        waker.wake();
+                    }
+
+                    //internal.waitlist.release(waitlist.receivers.len() == 0);
+                    //println!("Adding sender in waitlist");
                 }
                 return false
             }
+            else if elap == lap {
+                let next_head =
+                    if head + 1 < n { head_and_lap + 1 } //todo add wrapping!
+                    else { ((lap + 2) as u64) << 32 };
 
-            if head == internal.head.compare_and_swap(head, (head + 1), Ordering::Release) {
-                insert_at = head;
-                break;
+                if head_and_lap == internal.head.compare_and_swap(head_and_lap, next_head, Ordering::Release) {
+                    insert_at = head;
+                    break;
+                }
             }
+
+
         }
 
-        internal.queue[(insert_at % n) as usize].write(value);
-        //println!("Writing at {}", insert_at as usize);
+        /*
+        waitlist.receivers.push(waker);
+        */
 
-        //println!("Wrote value {}", internal.receivers.color.load(Ordering::Acquire));
 
+        //println!("Writing at {}, lap {}", insert_at as usize, lap);
+
+
+        unsafe { *internal.queue[insert_at as usize].1.get() = Some(value) };
+        internal.queue[insert_at as usize].0.store(lap + 1, Ordering::Release);
+
+        if let Some(waker) = waitlist.receivers.pop() {
+            waker.wake();
+        }
+
+        /*
         loop {
-            let previous = internal.waitlist.color.compare_and_swap(SAFE_TO_READ, READING_FROM, Ordering::Acquire);
+            let previous = internal.waitlist.color.compare_and_swap(SAFE_TO_READ, READING_FROM, Ordering::AcqRel);
             if previous == EMPTY {
                 return true
             }
@@ -283,10 +320,14 @@ impl<T: Send> Sender<T> {
                 let waker = waitlist.receivers.pop().unwrap();
                 waker.wake();
 
+                println!("Removed receiver from waitlist {}", waitlist.receivers.len());
                 internal.waitlist.release(waitlist.receivers.len() == 0);
+
                 break;
             }
-        };
+        };*/
+
+        //println!("Wrote value {}", internal.receivers.color.load(Ordering::Acquire));
 
         return true
     }
@@ -327,26 +368,30 @@ impl<T: Send> Receiver<T> {
         let internal = self.internal.as_ref();
         let n = internal.queue.len() as u32; //should never resize
         let mut read_at: u32 = 0;
-        let mut next_read_at: u32 = 0;
+        let mut next_read_at: u64 = 0;
+        let mut lap : u32 = 0;
 
         loop {
-            let tail = internal.tail.load(Ordering::Acquire);
+            let tail_and_lap = internal.tail.load(Ordering::Relaxed);
+            lap = (tail_and_lap >> 32) as u32;
+            let tail = tail_and_lap as u32;
+            let elap = internal.queue[tail as usize].0.load(Ordering::Relaxed);
 
-            let is_empty = internal.queue[(tail % n) as usize].is_empty(); // (head - tail).0 == 0;
-            //println!("{} is empty {}", tail, is_empty);
+            let is_empty = lap as i32 - elap as i32 > 0; // (head - tail).0 == 0;
             if is_empty {
-                let waitlist = internal.waitlist.acquire(WRITTEN_TO);
-                let tail = internal.tail.load(Ordering::Acquire);
+                let mut waitlist = internal.waitlist.lock(); //internal.waitlist.acquire(WRITTEN_TO);
 
-                if !internal.queue[(tail % n) as usize].is_empty() {
-                    //println!("Continued!");
-                    internal.waitlist.release(waitlist.receivers.len() == 0);
+                let tail_and_lap = internal.tail.load(Ordering::Relaxed);
+                lap = (tail_and_lap >> 32) as u32;
+                let tail = tail_and_lap as u32;
+                let elap = internal.queue[tail as usize].0.load(Ordering::Acquire);
+
+                if lap == elap {
                     continue;
                 }
 
                 if let Some((value, waker)) = waitlist.senders.pop() {
                     waker.wake();
-                    internal.waitlist.release(waitlist.receivers.len() == 0);
                     return Some(value)
                 }
 
@@ -354,32 +399,33 @@ impl<T: Send> Receiver<T> {
                     waitlist.receivers.push(waker);
                 }
 
-                internal.waitlist.release(waitlist.receivers.len() == 0);
-
                 return None
             }
+            else if lap == elap {
+                let next_tail =
+                    if tail + 1 < n { tail_and_lap + 1 }
+                    else { ((lap + 2) as u64) << 32 };
 
-            if tail == internal.tail.compare_and_swap(tail, (Wrapping(tail) + Wrapping(1)).0, Ordering::AcqRel) {
+                if tail_and_lap != internal.tail.compare_and_swap(tail_and_lap, next_tail, Ordering::Relaxed) { continue }
+
                 read_at = tail;
-                next_read_at = (Wrapping(tail) + Wrapping(1)).0;
+                next_read_at = next_tail;
                 break;
+
             }
         }
 
-        println!("Try Reading at {}", read_at % n);
+        //std::thread::sleep(Duration::from_millis(1));
 
-        for i in 0..1000 {
-            if let Some(value) = internal.queue[(read_at % n) as usize].read() {
-                //println!("Read at {}, next: {}", read_at, next_read_at);
-                return Some(value)
-            }
+        //println!("Reading at {}, lap: {}, next_tail: {}", read_at, lap, next_read_at);
 
-            //println!("Can't read {} because state is {}", ;
-        }
+        let value = unsafe { &mut *internal.queue[read_at as usize].1.get() }.take().unwrap();
+        internal.queue[read_at as usize].0.store(lap + 1, Ordering::Release);
 
-        panic!("Failed to read {} in time", read_at % n);
 
-        None
+        //panic!("Failed to read {} in time {}", read_at % n, read_at);
+
+        Some(value)
     }
 
     pub async fn recv(&self) -> T {
@@ -393,19 +439,19 @@ impl<T: Send> Receiver<T> {
 }
 
 pub fn channel<T: Send>(bounded: usize) -> (Sender<T>, Receiver<T>) {
-    let tricolor = Tricolor::new();
+    /*let tricolor = Tricolor::new();
     unsafe { *tricolor.value.get() =
         Some(Waitlist{
             receivers: vec![],
             senders: vec![],
         });
-    }
+    }*/
 
     let internal = Arc::new(Internal{
-        queue: (0..bounded).map(|_| Tricolor::new()).collect(),
-        waitlist: tricolor,
-        tail: atomic::AtomicU32::new(0),
-        head: atomic::AtomicU32::new(0),
+        queue: (0..bounded).map(|_| (atomic::AtomicU32::new(0), UnsafeCell::new(None))).collect(),
+        waitlist: Spinlock::new(Waitlist{senders: vec![], receivers: vec![]}),
+        tail: atomic::AtomicU64::new(1u64 << 32),
+        head: atomic::AtomicU64::new(0),
     });
 
     (Sender{internal: internal.clone()}, Receiver{internal: internal.clone()})

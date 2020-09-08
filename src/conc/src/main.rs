@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 pub mod mpmc;
 pub mod spinlock;
 
@@ -12,35 +14,30 @@ fn main() {
 
     let mut runtime = tokio::runtime::Runtime::new().expect("Unable to create a runtime");
 
-    for i in 0..10000 {
-        runtime.block_on(
-            async {
-                let mut joins = Vec::with_capacity(NUM_PRODUCERS);
+    for i in 0..200000 {
+        runtime.block_on(async {
+            let mut joins = Vec::with_capacity(NUM_PRODUCERS);
 
-                for p in 0..NUM_PRODUCERS {
-                    let mut sender = sender.clone();
+            for i in 0..NUM_PRODUCERS {
+                let mut sender = sender.clone();
+                let mut receiver = receiver.clone();
 
-                    tokio::spawn(async move {
-                        for i in 0..BUFFER_SIZE * BUFFER_MUL {
-                            sender.send(format!("producer {}, sent {}", p, i)).await;
-                        }
-                    });
+                tokio::spawn(async move {
+                    for i in 0..BUFFER_SIZE * BUFFER_MUL {
+                        sender.send(i).await;
+                    }
+                });
 
-                    let mut receiver = receiver.clone();
+                joins.push(tokio::spawn(async move {
+                    for i in 0..BUFFER_SIZE * BUFFER_MUL {
+                        let val = receiver.recv().await;
+                    }
+                }));
+            }
 
-                    joins.push(tokio::spawn(async move {
-                        for i in 0..BUFFER_SIZE * BUFFER_MUL {
-                            //println!("Getting read number {}", i);
-                            let val = receiver.recv().await;
-
-                            //println!("Got val {}", val);
-                        }
-                    }));
-                }
-
-                for join in joins {
-                    tokio::join!(join);
-                }
-            });
+            for join in joins {
+                tokio::join!(join);
+            }
+        });
     };
 }
