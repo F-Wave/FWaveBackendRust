@@ -12,6 +12,9 @@ edition = "2018"
 [dependencies]
 
 conc = { path = "src/conc" }
+data = { path = "src/data" }
+data-macros = { path = "src/data-macros" }
+data-derive = { path = "src/data-derive" }
 sqlx = { version = "0.4.0-beta.1", default-features = false, features = [ "runtime-tokio", "macros", "postgres", "chrono" ] }
 async-graphql = "1.17.8"
 tokio = { version="0.2.22", features = ["macros", "tcp", "dns", "io-util"] }
@@ -28,5 +31,5 @@ dotenv = "0.15.0"
 bcrypt = "0.8.2"
 rand = "0.7.3"
 redis = "0.17.0"
-redis-serialize = { path = "src/redis_serialize" }
+
 

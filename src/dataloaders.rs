@@ -1,5 +1,5 @@
 use crate::context::{SharedContext};
-use conc::dataloader::*;
+use data::dataloader::*;
 use crate::schema::*;
 use crate::prof::*;
 use log::info;
@@ -8,18 +8,11 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::{Duration};
-use sqlx;
 use sqlx::{query_as};
 use serde::export::Formatter;
 
 pub struct Loaders {
     pub account: DataLoaderEndpoint<Account>,
-}
-
-fn loader_error<T, E: Error>(results: &mut HashMap<ID, DataResult<T>>, e: E) {
-    for (id, value) in results {
-        *value = DataResult::Error(e.to_string());
-    }
 }
 
 struct AccountLoader {}
@@ -42,13 +35,14 @@ impl std::error::Error for DidNotFindPostError {
 
 }
 
+/*
 #[async_trait]
 impl DataLoaderHandler<Account, SharedContext> for AccountLoader {
     async fn batch_execute(
         &mut self,
         shared: &SharedContext,
         results: &mut HashMap<ID, DataResult<Account>>,
-    ) {
+    ) -> Result<(), data::dataloader::Error> {
         let mut prof = Prof::new();
         let db = &shared.db;
 
@@ -59,13 +53,8 @@ impl DataLoaderHandler<Account, SharedContext> for AccountLoader {
 
         info!("LOADING BATCH IDS: {:?}", ids);
 
-        let accounts = match query_as!(Account, "SELECT id, username, profile FROM Users WHERE id = ANY($1)", &ids)
-            .fetch_all(db)
-            .await {
-            Ok(r) => r,
-            Err(e) => return loader_error(results, e)
-        };
 
+        let accounts = select_from!(Account, "WHERE id = ANY($1)", &ids);
 
         /*
 
@@ -90,7 +79,7 @@ impl DataLoaderHandler<Account, SharedContext> for AccountLoader {
 
         prof.log("Account batch loader");
     }
-}
+}*/
 
 pub fn make_loaders(shared: Arc<SharedContext>) -> Arc<Loaders> {
     Arc::new(Loaders {

@@ -1,12 +1,12 @@
 use crate::context::{get_db};
 use crate::auth::{get_auth};
 use crate::prof::Prof;
-use conc::dataloader::{ID};
+use data::dataloader::{ID};
+use data::data_macros::*;
 use crate::schema::{Project, Bond, Post, Image};
 use async_graphql_derive::*;
 use async_graphql::{Context, FieldResult};
 use sqlx::{query, query_as};
-
 
 
 //field(name = "sdgs", type="&[i32]")
@@ -69,6 +69,26 @@ impl QueryExplore {
 
     async fn categories_for_you(&self, ctx: &Context<'_>, cursor: i32, limit: i32) -> FieldResult<Vec<Content>> {
         Ok(vec![])
+    }
+
+    async fn project_by_id(&self, ctx: &Context<'_>, id: ID) -> FieldResult<Project> {
+        Ok(query_one_as!(ctx, Project, "SELECT id, name, description, image, sdgs, latitude, longitude
+        FROM Projects WHERE id = $1", id))
+    }
+
+    async fn bond_by_id(&self, ctx: &Context<'_>, id: ID) -> FieldResult<Bond> {
+        let result = query_as!(Bond, "SELECT id, image, sdgs, title, issuer, description,
+        interest, maturity, price,
+        msciesrating, moodysrating, standardsandpoor,
+        fitchrating, amountinvested,
+        total, cicerorating
+        FROM BONDS
+        WHERE
+            id = $1", id)
+            .fetch_one(get_db(ctx))
+            .await?;
+
+        Ok(result)
     }
 
     async fn search(&self, ctx: &Context<'_>, sdg: Option<i32>, filter: Option<String>) -> FieldResult<Vec<Content>> {

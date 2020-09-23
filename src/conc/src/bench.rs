@@ -7,7 +7,7 @@ mod tests {
     use crate::mpmc;
     use crate::mpmc::*;
 
-    const BUFFER_SIZE: usize = 10;
+    const BUFFER_SIZE: usize = 64;
     const BUFFER_MUL: usize = 5;
     const NUM_PRODUCERS: usize = 10;
 
@@ -42,7 +42,7 @@ mod tests {
 
     #[bench]
     fn bench_mpmc(b: &mut Bencher) {
-        let (sender, mut receiver) = mpmc::channel(BUFFER_SIZE);
+        let (sender, mut receiver) = mpmc::channel(BUFFER_SIZE as u32);
 
         let mut runtime = tokio::runtime::Runtime::new().expect("Unable to create a runtime");
         let mut it = 0;
@@ -54,7 +54,7 @@ mod tests {
             //println!("On it {}", it);
             runtime.block_on(
                 async {
-                    let mut joins = Vec::with_capacity(NUM_PRODUCERS);
+                    //let mut joins = Vec::with_capacity(NUM_PRODUCERS);
 
                     for i in 0..NUM_PRODUCERS {
                         let mut sender = sender.clone();
@@ -66,17 +66,20 @@ mod tests {
                             }
                         });
 
-                        joins.push(tokio::spawn(async move {
+                        /*joins.push(tokio::spawn(async move {
                             for i in 0..BUFFER_SIZE * BUFFER_MUL {
                                 let val = receiver.recv().await;
                             }
-                        }));
+                        }));*/
                     }
 
+                    for i in 0..BUFFER_SIZE * BUFFER_MUL * NUM_PRODUCERS {
+                        let val = receiver.recv().await;
+                    }
 
-                    for join in joins {
+                    /*for join in joins {
                         tokio::join!(join);
-                    }
+                    }*/
                 });
         });
     }

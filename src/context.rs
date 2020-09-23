@@ -170,10 +170,8 @@ pub fn get_shared<'a>(ctx: &'a async_graphql::Context<'_>) -> &'a SharedContext 
 pub fn get_db<'a>(ctx: &'a async_graphql::Context<'_>) -> &'a DBClient {
     &get_shared(ctx).db
 }
-
-pub fn get_analytics<'a>(ctx: &'a async_graphql::Context<'_>) -> &'a AnalyticsClient {
-    &get_shared(ctx).analytics
-}
+pub fn get_analytics<'a>(ctx: &'a async_graphql::Context<'_>) -> &'a AnalyticsClient { &get_shared(ctx).analytics }
+pub async fn get_redis_conn(ctx: &async_graphql::Context<'_>) -> RedisConnection { get_shared(ctx).redis.conn().await }
 
 //make number of connections an environment variable
 async fn make_db() -> Result<DBClient, sqlx::Error> {
@@ -182,10 +180,14 @@ async fn make_db() -> Result<DBClient, sqlx::Error> {
         Err(e) => return Err(sqlx::Error::Configuration(Box::from(e))),
     };
 
+    println!("Connecting to database!");
+
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect_timeout(std::time::Duration::from_millis(100)) //todo: this should not be necessary
         .connect(&url).await?;
+
+    println!("Sucessfully connected!");
 
     Ok(pool)
 }
@@ -200,7 +202,7 @@ async fn make_redis() -> InitResult<RedisClient> {
 
 async fn make_analytics(db: &DBClient, redis: &RedisClient) -> InitResult<AnalyticsClient> {
     AnalyticsOptions::new(db, redis)
-        .max_pending_tasks(10)
+        .max_pending_tasks(16)
         .num_workers(1)
         .create().await
 }

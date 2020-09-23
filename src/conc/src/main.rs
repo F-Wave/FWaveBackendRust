@@ -3,18 +3,19 @@ use std::sync::atomic::Ordering;
 pub mod mpmc;
 pub mod spinlock;
 
-const BUFFER_SIZE: usize = 10;
+const BUFFER_SIZE: usize = 16;
 const BUFFER_MUL: usize = 5;
 const NUM_PRODUCERS: usize = 10;
 
 //+nightly bench -- --nocapture
 
 fn main() {
-    let (sender, mut receiver) = mpmc::channel(BUFFER_SIZE);
+    let (sender, mut receiver) = mpmc::channel(BUFFER_SIZE as u32);
 
     let mut runtime = tokio::runtime::Runtime::new().expect("Unable to create a runtime");
 
     for i in 0..200000 {
+        println!("========================");
         runtime.block_on(async {
             let mut joins = Vec::with_capacity(NUM_PRODUCERS);
 

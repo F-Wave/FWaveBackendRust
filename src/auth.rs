@@ -6,11 +6,11 @@ use rand::distributions::Alphanumeric;
 use std::sync::Arc;
 use chrono::{Utc};
 use redis;
-use conc::dataloader::ID;
+use data::dataloader::ID;
 use crate::context::{get_shared, get_db, SharedContext, RedisClient, RedisConnection};
+use crate::analytics;
 use redis::AsyncCommands;
 use redis::aio::ConnectionLike;
-
 
 pub struct Auth {
     pub user: ID,
@@ -55,8 +55,6 @@ async fn begin_session(ctx: &SharedContext, account: ID, device_token: Option<St
 
     let signed_in_at = Utc::now();
 
-
-
     let mut pipe = redis::pipe();
     pipe.set_ex(&account_for_session(&token), account,SESSION_EXPIRATION);
 
@@ -67,6 +65,8 @@ async fn begin_session(ctx: &SharedContext, account: ID, device_token: Option<St
 
     let mut redis = ctx.redis.conn().await;
     pipe.query_async(&mut redis).await?;
+
+    ctx.analytics.begin_session(token.clone(), analytics::PageID::Home).await;
 
     Ok(LoginResult{token, account_id: account})
 }
@@ -128,3 +128,4 @@ impl MutationAuth {
         }
     }
 }
+

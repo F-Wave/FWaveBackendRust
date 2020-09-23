@@ -16,6 +16,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{delay_for, Delay};
 
 pub type ID = i32;
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 type AccessFrame = HashMap<ID, u32>;
 
@@ -155,20 +156,20 @@ impl<T> DataResult<T> {
     }
 }
 
-struct DataLoaderFutureShared<T: Clone + Send> {
+struct DataLoaderFutureShared<T: Send> {
     result: DataResult<T>,
     waker: Option<Waker>,
 }
 
-pub struct DataLoaderFuture<T: Clone + Send> {
+pub struct DataLoaderFuture<T: Send> {
     id: ID,
     shared: Arc<Mutex<DataLoaderFutureShared<T>>>,
 }
 
-impl<T: Clone + Send> Unpin for DataLoaderFuture<T> {}
+impl<T: Send> Unpin for DataLoaderFuture<T> {}
 
 //this is way to allocation heavy!
-impl<T: Clone + Send> Future for DataLoaderFuture<T> {
+impl<T: Send> Future for DataLoaderFuture<T> {
     type Output = Result<T, String>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
@@ -191,9 +192,9 @@ impl<T: Clone + Send> Future for DataLoaderFuture<T> {
 }
 
 #[derive(Clone)]
-pub struct DataLoaderEndpoint<T: Clone + Send>(Sender<DataLoaderFuture<T>>);
+pub struct DataLoaderEndpoint<T: Send>(Sender<DataLoaderFuture<T>>);
 
-impl<T: Clone + Send> DataLoaderEndpoint<T> {
+impl<T: Send> DataLoaderEndpoint<T> {
     pub async fn load(&mut self, id: ID) -> Result<T, String> {
         let shared = Arc::new(Mutex::new(DataLoaderFutureShared {
             result: DataResult::Pending,
@@ -232,7 +233,7 @@ pub trait DataLoaderHandler<T, C> {
         &mut self,
         ctx: &C,
         results: &mut HashMap<ID, DataResult<T>>,
-    );
+    ) -> Result<(), Error>;
 }
 
 pub struct DataLoader<
@@ -325,7 +326,11 @@ impl<
     }
 
     async fn batch_execute(&mut self, ctx: &C) {
-        self.loader.batch_execute(ctx, &mut self.results).await;
+        if let Err(e) = self.loader.batch_execute(ctx, &mut self.results).await {
+            for (id, value) in &mut self.results {
+                *value = DataResult::Error(format!("{}: {}", id, e));
+            }
+        }
 
         //with a retain mut could merge into one loop
         for future in &mut self.futures {

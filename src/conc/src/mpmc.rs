@@ -182,10 +182,13 @@ pub struct Waitlist<T> {
 }
 
 pub struct Internal<T: Send> {
-    pub queue: Vec<(atomic::AtomicU32, UnsafeCell<Option<T>>)>, //ring buffer
-    pub waitlist: Spinlock<Waitlist<T>>,
-    pub head: atomic::AtomicU64,
-    pub tail: atomic::AtomicU64,
+    pub queue: Vec<Option<T>>, //ring buffer
+    //pub waitlist: Waitlist<T>,
+    pub receivers: Vec<Waker>,
+    pub senders: Vec<(T, Waker)>,
+    pub head: Wrapping<u32>,
+    pub tail: Wrapping<u32>,
+    pub mask: u32,
     /*read_at: atomic::AtomicU32,
     head: atomic::AtomicU32,
     write_at: atomic::AtomicU32,
@@ -213,11 +216,11 @@ fn from_head_and_tail(head: u16, tail: u16) -> u32 {
 }*/
 
 pub struct Receiver<T: Send> {
-    pub internal: Arc<Internal<T>>,
+    pub internal: Arc<Mutex<Internal<T>>>,
 }
 
 pub struct Sender<T: Send> {
-    internal: Arc<Internal<T>>
+    internal: Arc<Mutex<Internal<T>>>
 }
 
 impl<T: Send> Clone for Sender<T> {
@@ -228,106 +231,33 @@ impl<T: Send> Clone for Sender<T> {
 
 impl<T: Send> Sender<T> {
     fn send_or_add_to_waitlist(&self, waker: Option<Waker>, value: T) -> bool {
-        let internal = self.internal.as_ref();
-
+        let mut internal = self.internal.as_ref().lock().unwrap();
         let n = internal.queue.len() as u32; //should never resize
-        let mut insert_at : u32 = 0;
-        let mut next_head : u32 = 0;
-        let mut lap : u32 = 0;
 
-        let mut waitlist = internal.waitlist.lock();
+        let is_full = (internal.head - internal.tail).0 >= n;
 
-        //println!("=== SEND ATTEMPT ===");
+        if is_full {
+            if let Some(waker) = waker {
+                internal.senders.push((value, waker)); //remove clone somehow
 
-        loop {
-            let head_and_lap = internal.head.load(Ordering::Acquire);
-            lap = (head_and_lap >> 32) as u32;
-            let head = head_and_lap as u32;
-            let elap = internal.queue[head as usize].0.load(Ordering::Acquire);
-            //let tail = Wrapping(internal.tail.load(Ordering::Acquire));
-
-            let is_full = (lap as i32 - elap as i32) > 0;//  !internal.queue[(head % n) as usize].is_empty();
-
-            /*if (head - tail).0 > n {
-                println!("Should not happen!!! {} {}", head, tail);
-                continue
-            }*/
-
-            if is_full {
-                if let Some(waker) = &waker {
-                    //let mut waitlist = internal.waitlist.lock(); //internal.waitlist.acquire(WRITTEN_TO);
-
-                    let head_and_lap = internal.head.load(Ordering::Acquire);
-                    let lap = (head_and_lap >> 32) as u32;
-                    let head = head_and_lap as u32;
-                    let elap = internal.queue[head as usize].0.load(Ordering::Acquire);
-
-                    if lap == elap { //inserted value which has not been read yet
-                        //internal.waitlist.release(waitlist.receivers.len() == 0);
-                        continue
-                    }
-
-
-                    waitlist.senders.push((value, waker.clone())); //remove clone somehow
-
-                    if let Some(waker) = waitlist.receivers.pop() {
-                        //println!("Removing receiver from waitlist rare!!!! {}", head_and_lap);
-                        waker.wake();
-                    }
-
-                    //internal.waitlist.release(waitlist.receivers.len() == 0);
-                    //println!("Adding sender in waitlist");
+                if let Some(waker) = internal.receivers.pop() {
+                    waker.wake();
                 }
+
                 return false
             }
-            else if elap == lap {
-                let next_head =
-                    if head + 1 < n { head_and_lap + 1 } //todo add wrapping!
-                    else { ((lap + 2) as u64) << 32 };
-
-                if head_and_lap == internal.head.compare_and_swap(head_and_lap, next_head, Ordering::Release) {
-                    insert_at = head;
-                    break;
-                }
-            }
-
-
         }
 
-        /*
-        waitlist.receivers.push(waker);
-        */
+        let head = (internal.head.0 & internal.mask) as usize;
+        internal.queue[head] = Some(value);
+        //println!("Writing at {}", head);
+        internal.head += Wrapping(1);
 
+        //println!("Inserted at {}", head);
 
-        //println!("Writing at {}, lap {}", insert_at as usize, lap);
-
-
-        unsafe { *internal.queue[insert_at as usize].1.get() = Some(value) };
-        internal.queue[insert_at as usize].0.store(lap + 1, Ordering::Release);
-
-        if let Some(waker) = waitlist.receivers.pop() {
+        if let Some(waker) = internal.receivers.pop() {
             waker.wake();
         }
-
-        /*
-        loop {
-            let previous = internal.waitlist.color.compare_and_swap(SAFE_TO_READ, READING_FROM, Ordering::AcqRel);
-            if previous == EMPTY {
-                return true
-            }
-            if previous == SAFE_TO_READ {
-                let waitlist = unsafe { (*internal.waitlist.value.get()).as_mut().unwrap() };
-                let waker = waitlist.receivers.pop().unwrap();
-                waker.wake();
-
-                println!("Removed receiver from waitlist {}", waitlist.receivers.len());
-                internal.waitlist.release(waitlist.receivers.len() == 0);
-
-                break;
-            }
-        };*/
-
-        //println!("Wrote value {}", internal.receivers.color.load(Ordering::Acquire));
 
         return true
     }
@@ -365,67 +295,34 @@ impl<T: Send> Clone for Receiver<T> {
 
 impl<T: Send> Receiver<T> {
     pub fn recv_or_add_to_waitlist(&self, waker: Option<Waker>) -> Option<T> {
-        let internal = self.internal.as_ref();
+        let mut internal = self.internal.as_ref().lock().unwrap();
         let n = internal.queue.len() as u32; //should never resize
-        let mut read_at: u32 = 0;
-        let mut next_read_at: u64 = 0;
-        let mut lap : u32 = 0;
 
-        loop {
-            let tail_and_lap = internal.tail.load(Ordering::Relaxed);
-            lap = (tail_and_lap >> 32) as u32;
-            let tail = tail_and_lap as u32;
-            let elap = internal.queue[tail as usize].0.load(Ordering::Relaxed);
-
-            let is_empty = lap as i32 - elap as i32 > 0; // (head - tail).0 == 0;
-            if is_empty {
-                let mut waitlist = internal.waitlist.lock(); //internal.waitlist.acquire(WRITTEN_TO);
-
-                let tail_and_lap = internal.tail.load(Ordering::Relaxed);
-                lap = (tail_and_lap >> 32) as u32;
-                let tail = tail_and_lap as u32;
-                let elap = internal.queue[tail as usize].0.load(Ordering::Acquire);
-
-                if lap == elap {
-                    continue;
-                }
-
-                if let Some((value, waker)) = waitlist.senders.pop() {
-                    waker.wake();
-                    return Some(value)
-                }
-
-                if let Some(waker) = waker {
-                    waitlist.receivers.push(waker);
-                }
-
-                return None
+        let is_empty = internal.head == internal.tail; // (head - tail).0 == 0;
+        if is_empty {
+            if let Some((value, waker)) = internal.senders.pop() {
+                waker.wake();
+                return Some(value)
             }
-            else if lap == elap {
-                let next_tail =
-                    if tail + 1 < n { tail_and_lap + 1 }
-                    else { ((lap + 2) as u64) << 32 };
 
-                if tail_and_lap != internal.tail.compare_and_swap(tail_and_lap, next_tail, Ordering::Relaxed) { continue }
-
-                read_at = tail;
-                next_read_at = next_tail;
-                break;
-
+            if let Some(waker) = waker {
+                internal.receivers.push(waker);
             }
+
+            return None
         }
 
-        //std::thread::sleep(Duration::from_millis(1));
+        let tail = (internal.tail.0 & internal.mask) as usize;
+        let value = internal.queue[tail].take();
+        //println!("Reading at {}", tail);
+        internal.tail += Wrapping(1);
 
-        //println!("Reading at {}, lap: {}, next_tail: {}", read_at, lap, next_read_at);
-
-        let value = unsafe { &mut *internal.queue[read_at as usize].1.get() }.take().unwrap();
-        internal.queue[read_at as usize].0.store(lap + 1, Ordering::Release);
-
-
-        //panic!("Failed to read {} in time {}", read_at % n, read_at);
-
-        Some(value)
+        match value {
+            Some(value) => Some(value),
+            None => {
+                panic!("Should never happen!!!!!");
+            }
+        }
     }
 
     pub async fn recv(&self) -> T {
@@ -438,7 +335,7 @@ impl<T: Send> Receiver<T> {
     }
 }
 
-pub fn channel<T: Send>(bounded: usize) -> (Sender<T>, Receiver<T>) {
+pub fn channel<T: Send>(bounded: u32) -> (Sender<T>, Receiver<T>) {
     /*let tricolor = Tricolor::new();
     unsafe { *tricolor.value.get() =
         Some(Waitlist{
@@ -447,12 +344,18 @@ pub fn channel<T: Send>(bounded: usize) -> (Sender<T>, Receiver<T>) {
         });
     }*/
 
-    let internal = Arc::new(Internal{
-        queue: (0..bounded).map(|_| (atomic::AtomicU32::new(0), UnsafeCell::new(None))).collect(),
-        waitlist: Spinlock::new(Waitlist{senders: vec![], receivers: vec![]}),
-        tail: atomic::AtomicU64::new(1u64 << 32),
-        head: atomic::AtomicU64::new(0),
-    });
+    if bounded != 1 && (bounded & (bounded - 1)) != 0 {
+        panic!("Channel buffer size must be a power of 2");
+    }
+
+    let internal = Arc::new(Mutex::new(Internal{
+        queue: (0..bounded).map(|_| None).collect(),
+        senders: vec![],
+        receivers: vec![],
+        tail: Wrapping(0),
+        head: Wrapping(0),
+        mask: bounded - 1
+    }));
 
     (Sender{internal: internal.clone()}, Receiver{internal: internal.clone()})
 }

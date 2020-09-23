@@ -7,6 +7,8 @@ mod image;
 mod chat;
 mod explore;
 mod analytics;
+mod followers;
+mod for_you;
 //mod time;
 
 use crate::context::{make_shared_context, SharedContext, RedisClient};
@@ -84,6 +86,8 @@ async fn index_image(shared: &SharedContext, req: Request<Body>) -> HTTPResponse
     };
 
     if let Some(result) = result {
+        info!("IMAGE SIZE {} kb", result.len() / 1024);
+
         let mut resp = Response::new(Body::from(result));
         resp.headers_mut().insert("Content-Type", HeaderValue::from_static("image/png"));
 

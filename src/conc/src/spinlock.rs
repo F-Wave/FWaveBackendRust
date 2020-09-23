@@ -45,5 +45,8 @@ impl<T: Send> Spinlock<T> {
     }
 }
 
+unsafe impl<T: Send> Sync for Spinlock<T> {}
+unsafe impl<T: Send> Send for Spinlock<T> {}
+
 
 

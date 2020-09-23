@@ -420,7 +420,6 @@ dependencies = [
 name = "conc"
 version = "0.1.0"
 dependencies = [
- "async-trait 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio 0.2.22 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -487,6 +486,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "generic-array 0.14.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "subtle 2.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "data"
+version = "0.1.0"
+dependencies = [
+ "async-graphql 1.17.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-graphql-derive 1.17.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-trait 0.1.37 (registry+https://github.com/rust-lang/crates.io-index)",
+ "data-derive 0.1.0",
+ "data-macros 0.1.0",
+ "sqlx 0.4.0-beta.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio 0.2.22 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "data-derive"
+version = "0.1.0"
+dependencies = [
+ "async-graphql 1.17.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-graphql-derive 1.17.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "proc-macro2 1.0.19 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quote 1.0.7 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde_derive 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
+ "sqlx 0.4.0-beta.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn 1.0.39 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "data-macros"
+version = "0.1.0"
+dependencies = [
+ "sqlx 0.4.0-beta.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -708,13 +741,15 @@ dependencies = [
  "bcrypt 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.4.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "conc 0.1.0",
+ "data 0.1.0",
+ "data-derive 0.1.0",
+ "data-macros 0.1.0",
  "dotenv 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.13.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "pretty_env_logger 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.7.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "redis 0.17.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "redis-serialize 0.1.0",
  "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_json 1.0.57 (registry+https://github.com/rust-lang/crates.io-index)",
  "sqlx 0.4.0-beta.1 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1448,16 +1483,6 @@ dependencies = [
  "tokio 0.2.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-util 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "url 2.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "redis-serialize"
-version = "0.1.0"
-dependencies = [
- "quote 1.0.7 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_derive 1.0.115 (registry+https://github.com/rust-lang/crates.io-index)",
- "syn 1.0.39 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]

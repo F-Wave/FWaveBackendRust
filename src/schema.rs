@@ -1,20 +1,25 @@
 //use crate::context::Context;
 use crate::context::{get_db, get_shared};
 use crate::dataloaders::*;
-use conc::dataloader::ID;
+use data::dataloader::ID;
+use data::sql_resolve::{SQLResolve, SQLTable};
+use data_macros::*;
+use data_derive::*;
 use crate::prof::*;
-use crate::auth::MutationAuth;
+use crate::auth::{MutationAuth, get_auth};
 use crate::chat::{QueryChats, MutationChat};
 use crate::explore::QueryExplore;
+use crate::analytics::{QueryAnalytics, MutationAnalytics};
+use crate::followers::{QueryFollowers, MutationFollowers};
 use async_graphql::{Context, FieldResult, InputValueError, InputValueResult, ScalarType, EmptySubscription, Schema};
 use async_graphql_derive::*;
 use chrono::{DateTime, Utc};
 use std::error::Error;
 use std::vec::Vec;
-use sqlx::{query_as, query};
+use sqlx::{query_as, query, Row};
 use log::info;
 use std::default::Default;
-use crate::analytics::Analytics;
+
 
 pub type Image = i32;
 
@@ -32,23 +37,55 @@ impl<'a> FromSql<'a> for Timestamp {
 }*/
 
 
-#[SimpleObject]
-#[derive(Clone)]
+#[sql("Users")]
 pub struct Account {
     pub id: i32,
+    pub bio: String,
     pub username: String,
     pub profile: String,
 }
 
+/*
 impl Account {
     pub async fn with_id(ctx: &Context<'_>, id: ID) -> FieldResult<Account> {
         let mut loader = get_loaders(ctx).account.clone();
         Ok(loader.load(id).await?)
         //Account{id: id, username: "".to_string(), profile: "".to_string()}
     }
+}*/
+
+#[sql("Users")]
+pub struct MyAccountInfo {
+    pub id: ID,
+    pub username: String,
+    pub profile: String,
+    pub bio: String,
+    pub email: String,
+    pub residence: String,
 }
 
-#[derive(Clone)]
+#[derive(async_graphql::GQLMergedObject)]
+pub struct MyAccount(pub MyAccountInfo, pub QueryFollowers);
+
+#[derive(Default)]
+pub struct QueryMyAccount;
+
+
+
+#[Object]
+impl QueryMyAccount {
+    async fn my_account(&self, ctx: &Context<'_>) -> FieldResult<MyAccount> {
+        let user = get_auth(ctx)?.user;
+
+        let info = select_one_from!(ctx, MyAccountInfo, "WHERE id = $1", user);
+
+        //let info = query_one_as!(ctx, MyAccountInfo, "SELECT id, username, profile, bio, email, residence FROM Users WHERE id = $1", user);
+
+        Ok(MyAccount(info, QueryFollowers{user}))
+    }
+}
+
+#[sql("Comments")]
 pub struct Comment {
     pub id: ID,
     pub account: ID,
@@ -56,18 +93,7 @@ pub struct Comment {
     pub sent: DateTime<Utc>,
 }
 
-#[Object]
-impl Comment {
-    async fn id(&self) -> ID { self.id }
-    async fn mesg(&self) -> &str { &self.mesg }
-    async fn sent(&self) -> &Timestamp { &self.sent }
-    async fn account(&self, ctx: &Context<'_>) -> FieldResult<Account> {
-        let mut account = get_loaders(ctx).account.clone();
-        Ok(account.load(self.account).await?)
-    }
-}
-
-#[derive(Clone)]
+#[sql("Post")]
 pub struct Post {
     pub id: i32,
     pub account: ID,
@@ -158,14 +184,22 @@ impl Bond {
     pub async fn amount_invested(&self) -> i32 { self.amountinvested }
     pub async fn total(&self) -> i32 { self.total }
     pub async fn interest(&self) -> f64 { self.interest }
-    pub async fn standardsandpoor(&self) -> &str { &self.standardsandpoor }
-    pub async fn fitchrating(&self) -> &str { &self.fitchrating }
-    pub async fn cicerorating(&self) -> &str { &self.cicerorating }
-    pub async fn msciesrating(&self) -> &str { &self.msciesrating }
-    pub async fn moodysrating(&self) -> &str { &self.moodysrating }
+    pub async fn standards_and_poor_rating(&self) -> &str { &self.standardsandpoor }
+    pub async fn fitch_rating(&self) -> &str { &self.fitchrating }
+    pub async fn cicero_rating(&self) -> &str { &self.cicerorating }
+    pub async fn mscies_rating(&self) -> &str { &self.msciesrating }
+    pub async fn moodys_rating(&self) -> &str { &self.moodysrating }
     pub async fn notable_members(&self, ctx: &Context<'_>) -> FieldResult<Vec<Account>> {
         Ok(vec![])
     }
+}
+
+#[SimpleObject]
+pub struct ProjectMember {
+    id: i32,
+    role: i32,
+    account: Account,
+    joined: DateTime<Utc>
 }
 
 pub struct Project {
@@ -186,6 +220,30 @@ impl Project {
     pub async fn sdgs(&self) -> &[i32] { &self.sdgs }
     pub async fn latitude(&self) -> f64 { self.latitude }
     pub async fn longitude(&self) -> f64 { self.longitude }
+    pub async fn posts(&self, ctx: &Context<'_>, cursor: i64, limit: i64) -> FieldResult<Vec<Post>> {
+        Ok(query_all_as!(ctx, Post, "select id, account, image, title, description from Posts where project = $1 LIMIT $2", self.id, limit))
+    }
+    pub async fn members(&self, ctx: &Context<'_>) -> FieldResult<Vec<ProjectMember>> {
+        let results = query_all!(ctx, "select ProjectMembers.id, ProjectMembers.joined, ProjectMembers.role,
+        Users.id as account_id, Users.username, Users.profile
+        FROM ProjectMembers
+        INNER JOIN Users on ProjectMembers.account = Users.id
+        WHERE project = $1
+        ", self.id);
+
+        let members = results.into_iter().map(|member| ProjectMember{
+            id: member.id,
+            joined: member.joined,
+            account: Account{
+                id: member.id,
+                username: member.username,
+                profile: member.profile,
+            },
+            role: member.role
+        }).collect();
+
+        Ok(members)
+    }
 }
 
 
@@ -220,10 +278,10 @@ impl QueryFeed {
 
 //ROOT
 #[derive(async_graphql::GQLMergedObject, Default)]
-pub struct QueryRoot(pub QueryFeed, pub QueryExplore, pub QueryChats, pub Analytics);
+pub struct QueryRoot(pub QueryFeed, pub QueryExplore, pub QueryChats, pub QueryAnalytics, pub QueryMyAccount);
 
 #[derive(async_graphql::GQLMergedObject, Default)]
-pub struct MutationRoot(pub MutationAuth, pub MutationChat);
+pub struct MutationRoot(pub MutationAuth, pub MutationChat, pub MutationAnalytics, pub MutationFollowers);
 
 /*
 pub struct SubscriptionRoot;

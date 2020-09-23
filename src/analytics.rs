@@ -5,11 +5,11 @@ use chrono::{Utc, DateTime};
 use std::time::Duration;
 use std::collections::HashMap;
 use conc::mpmc::*;
-use conc::dataloader::ID;
+use data::dataloader::ID;
 use serde::{Serialize, Deserialize};
 use std::error::Error;
 use log::{info, error};
-use redis_serialize::RedisValue;
+use data::RedisValue;
 
 
 pub struct PostID(ID);
@@ -18,7 +18,7 @@ pub struct ProjectID(ID);
 pub struct CommentID(ID);
 
 #[Enum]
-#[derive(Hash, Serialize, Deserialize)]
+#[derive(Hash, Serialize, Deserialize, Debug)]
 pub enum ItemKind {
     Post,
     Bond,
@@ -27,14 +27,14 @@ pub enum ItemKind {
 }
 
 #[InputObject]
-#[derive(Hash, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Hash, Eq, PartialEq, Serialize, Deserialize, Debug)]
 pub struct AnalyticsItem {
     kind: ItemKind,
     id: ID,
 }
 
 #[Enum]
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Action {
     Viewed
 }
@@ -42,7 +42,7 @@ pub enum Action {
 type Millis = i32;
 
 #[InputObject]
-#[derive(Serialize, Deserialize, RedisValue)]
+#[derive(Serialize, Deserialize, RedisValue, Debug)]
 struct AnalyticsEvent {
     action: Action,
     item: AnalyticsItem,
@@ -167,19 +167,20 @@ impl Timeline {
 
 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum PageID {
     Detail(AnalyticsItem),
     Home,
     Explore,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Page {
     id: PageID,
     timestamp: DateTime<Utc>,
 }
 
+#[derive(Debug)]
 pub enum Task {
     BeginSession(String, Page),
     RegisterEvents(String, Vec<AnalyticsEvent>),
@@ -201,8 +202,8 @@ fn hash(value: &str) -> ID {
 pub struct AnalyticsOptions<'a> {
     db_conn_pool: &'a sqlx::PgPool,
     redis_conn_pool: &'a RedisClient,
-    num_workers: usize,
-    max_pending_tasks: usize,
+    num_workers: u32,
+    max_pending_tasks: u32,
 }
 
 impl<'a> AnalyticsOptions<'a> {
@@ -211,22 +212,22 @@ impl<'a> AnalyticsOptions<'a> {
             db_conn_pool: db,
             redis_conn_pool: redis,
             num_workers: 1,
-            max_pending_tasks: 10
+            max_pending_tasks: 16
         }
     }
 
-    pub fn num_workers(mut self, workers: usize) -> Self {
+    pub fn num_workers(mut self, workers: u32) -> Self {
         self.num_workers = workers;
         self
     }
 
-    pub fn max_pending_tasks(mut self, pending: usize) -> Self {
+    pub fn max_pending_tasks(mut self, pending: u32) -> Self {
         self.max_pending_tasks = pending;
         self
     }
 
     pub async fn create(self) -> Result<AnalyticsClient, Box<dyn Error + Send + Sync>> {
-        let (receiver, sender) = channel(self.max_pending_tasks);
+        let (sender, receiver) = channel(self.max_pending_tasks);
 
         for i in 0..self.num_workers {
             let worker = Worker{
@@ -363,13 +364,16 @@ impl Worker {
     }
 
     async fn perform_task(&mut self, task: Task) -> Result<(), Box<dyn Error>> {
+        println!("Analytics task : {:?}", task);
         match task {
             Task::BeginSession(token, page) => {
                 let info = PageInfo{previous: None, next: None, page: page.id};
 
+                println!("Beginning analytics session for token {}", token);
+
                 redis::pipe()
                     .set(page_info(&token, 0), serde_json::to_string(&info)?)
-                    .set(current_page(&token), 0)
+                    .set(current_page(&token), 0 as i32)
                     .query_async(&mut self.redis_conn).await?;
             },
             Task::RegisterEvents(token, events) => {
@@ -392,7 +396,7 @@ impl Worker {
                 pipeline
                     .set(&previous_page_key, &previous)
                     .set(page_info(&token, current_id), &current)
-                    .set(current_page_key, &current);
+                    .set(current_page_key, current_id);
 
                 self.register_events_and_execute(&mut pipeline, &page_events_key(&token, previous_id), &events).await?;
             }
@@ -403,12 +407,17 @@ impl Worker {
 
     async fn register_events_and_execute(&mut self, pipe: &mut redis::Pipeline, page_events_key: &str, events: &[AnalyticsEvent]) -> Result<(), Box<dyn Error>> {
         for event in events {
+            println!("Register event : {:?}", event);
             let json = serde_json::to_string(&event)?;
             pipe.lpush(page_events_key, json);
         }
 
         pipe.query_async(&mut self.redis_conn).await?;
         Ok(())
+    }
+
+    async fn accumlate_events() {
+
     }
 
     //async fn register_events(pipe: &mut redis::Pipeline, page_events_key: &str, event: &[Event]) {}
@@ -422,8 +431,6 @@ use hyper::{Request, Body};
 use crate::auth::get_auth;
 use sqlx::pool::PoolConnection;
 
-#[derive(Default)]
-pub struct Analytics;
 
 async fn navigate_to(ctx: &Context<'_>, page: PageID, events: Vec<AnalyticsEvent>) -> FieldResult<bool> {
     let token = get_auth(ctx)?.session_token.clone();
@@ -435,8 +442,11 @@ fn get_session_token(ctx: &Context<'_>) -> FieldResult<String> {
     Ok(get_auth(ctx)?.session_token.clone())
 }
 
+#[derive(Default)]
+pub struct MutationAnalytics;
+
 #[Object]
-impl Analytics {
+impl MutationAnalytics {
     async fn register_events(&self, ctx: &Context<'_>, events: Vec<AnalyticsEvent>) -> FieldResult<bool> {
         let token = get_session_token(ctx)?;
         get_analytics(ctx).register_events(token, events).await;
@@ -472,4 +482,12 @@ pub fn event_json_sample() {
 
     let json = serde_json::to_string(&event).unwrap();
     println!("Sample json {}", &json);
+}
+
+#[derive(Default)]
+pub struct QueryAnalytics;
+
+#[Object]
+impl QueryAnalytics {
+
 }
